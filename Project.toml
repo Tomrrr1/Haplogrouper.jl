@@ -1,0 +1,13 @@
+name = "Haplogrouper"
+uuid = "e479ba11-8e42-46ea-83ae-2c4a80049c5e"
+authors = ["Thomas Roberts <tomroberts.work15@gmail.com>"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.6.7"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
