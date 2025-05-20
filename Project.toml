@@ -12,7 +12,7 @@ FASTX = "c2308a5c-f048-11e8-3e8a-31650f418d12"
 Phylo = "aea672f4-3940-5932-aa44-993d1c3ff149"
 
 [compat]
-julia = "1.6.7"
+julia = "^1.6.7"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
