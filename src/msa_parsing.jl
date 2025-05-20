@@ -30,7 +30,7 @@ function check_msa_length(seq_dict::Dict{String, BioSequence{DNAAlphabet{4}}})
     return true
 end
 
-function parse_msa(filename::String, ref_id::String, tree::RecursiveTree)
+function parse_msa(filename::String, ref_id::String, tree::RecursiveTree, classify::Bool)
     records = collect(FASTA.Reader(open(filename, "r")))
     seq_dict = Dict{String, BioSequence{DNAAlphabet{4}}}()
     for record in records
@@ -39,25 +39,48 @@ function parse_msa(filename::String, ref_id::String, tree::RecursiveTree)
 
     @argcheck haskey(seq_dict, ref_id) "Reference '$ref_id' not found in the MSA file"
     check_msa_length(seq_dict)
-    check_sample_names(tree, seq_dict) # confirm newick and msa have same samples
+    # Only check tree consistency if not in classification mode
+    if !classify
+        check_sample_names(tree, seq_dict) # confirm newick and msa have same samples
+    end
 
     ref_seq = seq_dict[ref_id]
+    #println(ref_seq)
     all_samples = collect(keys(seq_dict))
     println("Samples found: $all_samples")
+
+    # Create a mapping from alignment positions to reference coordinates
+    # This will give us stable coordinates regardless of alignment gaps
+    ref_coord_map = Int[]
+    ref_coord = 0
+    
+    for (_, base) in enumerate(ref_seq)
+        if base != DNA_Gap  # Skip gaps in reference
+            ref_coord += 1
+            push!(ref_coord_map, ref_coord)
+        else
+            push!(ref_coord_map, ref_coord)  # Gap positions map to previous reference coordinate
+        end
+    end
     
     # Identify variants for each sample compared to the reference
-    leaf_vars = Dict(s => Set{Variant}() for s in all_samples)
-
+    leaf_vars = Dict(s => VariantSet() for s in all_samples)
     total_variants = 0
     for sample in all_samples
         sample == ref_id && continue
         variant_count = 0
-        for base in eachindex(ref_seq)
-            if ref_seq[base] == DNA_N || seq_dict[sample][base] == DNA_N
+        
+        for align_pos in eachindex(ref_seq)
+            # Skip positions with N or gaps in either sequence
+            if ref_seq[align_pos] == DNA_N || seq_dict[sample][align_pos] == DNA_N
+               # || ref_seq[align_pos] == DNA_Gap || seq_dict[sample][align_pos] == DNA_Gap
                 continue
             end
-            if seq_dict[sample][base] != ref_seq[base]
-                variant = (base, ref_seq[base], seq_dict[sample][base])
+            
+            if seq_dict[sample][align_pos] != ref_seq[align_pos]
+                # Use reference-based coordinate instead of alignment position
+                ref_pos = ref_coord_map[align_pos]
+                variant = (ref_pos, ref_seq[align_pos], seq_dict[sample][align_pos])
                 push!(leaf_vars[sample], variant)
                 variant_count += 1
                 total_variants += 1
