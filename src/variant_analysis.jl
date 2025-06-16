@@ -1,65 +1,32 @@
-# If all samples have non-ref allele then the ref allele is defining for the ref!
-function define_reference(leaf_vars::VariantMap, ref_id::String)
-    sets_of_positions = [Set(t[1] for t in ts) for (k, ts) in leaf_vars if k != ref_id]
-    return reduce(intersect, sets_of_positions)
+# Find node defining variants relative to the reconstructed ancestral sequence
+function define_nodes(tree::RecursiveTree, nucleotide_maps::VariantMap, reference_id::String)
+    ancestral_states = reconstruct_ancestral_seq(tree, nucleotide_maps, reference_id)
+    write_ancestral_sequence_tsv(ancestral_states, Phylo.getnodename(tree, Phylo.getroot(tree)), "./ancestral_sequence.tsv")
+    node_vars = build_node_vars(tree, ancestral_states)
+    
+    return node_vars
 end
 
-# This function finds unique variants for each sample
-function define_leaves(leaf_vars::VariantMap)
-    # Create a dictionary to track all variants and associated leaves
-    variant_to_leaves = Dict{Variant, Set{String}}()
-    for (leaf, variants) in leaf_vars
-        for variant in variants
-            if haskey(variant_to_leaves, variant)
-                push!(variant_to_leaves[variant], leaf)
-            else
-                variant_to_leaves[variant] = Set([leaf])
+# Get all variants shared by the descendants of each node
+function build_node_vars(tree::RecursiveTree, ancestral_states::Dict{String, Dict{Int, DNA}})
+    node_vars = VariantMap()
+    all_nodes = Phylo.getnodenames(tree)
+    root_name = Phylo.getnodename(tree, Phylo.getroot(tree))
+    root_states = ancestral_states[root_name]
+
+    # If a 
+    for node in all_nodes
+        node_vars[node] = VariantSet()
+        for (pos, node_base) in ancestral_states[node]
+            if !haskey(root_states, pos)
+                continue
+            end
+            root_base = root_states[pos]
+            if node_base != root_base
+                push!(node_vars[node], (pos, root_base, node_base))
             end
         end
     end
 
-    leaf_defn_vars = VariantMap()
-    for (leaf, variants) in leaf_vars
-        leaf_defn_vars[leaf] = VariantSet()
-        for variant in variants
-            if length(variant_to_leaves[variant]) == 1
-                push!(leaf_defn_vars[leaf], variant)
-                println("Defining variant for $leaf: $variant\n")
-            end
-        end
-    end
-    
-    return leaf_defn_vars
-end
-
-# Identify defining variants for internal nodes
-function define_nodes(tree::RecursiveTree, leaf_vars::Dict{String, Set{Variant}})
-    internal_nodes = reverse(filter(node -> node ∉ Phylo.getleafnames(tree), Phylo.getnodenames(tree)))
-    node_defn_vars = VariantMap()
-    all_node_vars = VariantMap()
-    
-    for node in internal_nodes
-        node_defn_vars[node] = VariantSet()
-        descendants = collect_descendant_leaves(tree, node)
-        shared_variants = reduce(intersect, [leaf_vars[d] for d in descendants]) 
-        all_node_vars[node] = shared_variants # all variants shared by node descendants
-
-        # Find unique defining variants for this node
-        for variant in shared_variants
-            ancestors = Phylo.getancestors(tree, node)
-            in_ancestor = false
-            for ancestor in ancestors
-                if variant in node_defn_vars[ancestor]
-                    in_ancestor = true
-                    break
-                end
-            end
-
-            if !in_ancestor
-                push!(node_defn_vars[node], variant)
-            end
-        end
-    end
-    
-    return [all_node_vars, node_defn_vars]
+    return node_vars
 end
