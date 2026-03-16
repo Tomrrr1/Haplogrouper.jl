@@ -1,8 +1,7 @@
-# Reconstruct the sequences at each node using Fitch's algorithm
+# Reconstruct the sequences at each node using the Fitch algorithm
 function reconstruct_ancestral_seq(tree::RecursiveTree, nucleotide_maps::Dict{String, Set{Tuple{Int, DNA, DNA}}}, reference_id::String)
     ancestral_states = Dict{String, Dict{Int, DNA}}() # node_name, pos, base
     all_nodes = Phylo.getnodenames(tree)
-
     for node in all_nodes
         ancestral_states[node] = Dict{Int, DNA}()
     end
@@ -49,7 +48,7 @@ function postorder_pass(tree::RecursiveTree, node_state_sets::Dict{String, Set{D
         children_names = [Phylo.getnodename(tree, c) for c in children]
         # Assume an internal node a with children b and c.
         if !isempty(children_names)
-            # We have the state sets S_b and S_c, which is simply the nucleotide at some position X.
+            # We have the state sets S_b and S_c, which are simply the nucleotides at some position X.
             child_state_sets = [node_state_sets[c] for c in children_names]
             # If the intersection of S_b and S_c is non-empty this becomes S_a (S_b and S_c have the same nucleotide)
             intersect_set = reduce(intersect, child_state_sets) 
@@ -88,9 +87,9 @@ function topdown_pass(tree::RecursiveTree, node_state_sets::Dict{String, Set{DNA
                     final_states[child_name] = first(child_state_set)
                 end
             end
-            # 
             push!(stack, child_name)
         end
     end
+    
     return final_states
 end

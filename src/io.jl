@@ -7,15 +7,16 @@ function output_variants_tsv(tree::RecursiveTree, node_vars::VariantMap, output_
             descendants = collect_descendant_leaves(tree, node)
             descendants_str = join(descendants, ",")
             
-            variants = get(node_vars, node, VariantSet())
-            variant_strs = ["$(v[1]):$(v[2])>$(v[3])" for v in variants]
-            variants_str = join(variant_strs, ",")
+            vars = get(node_vars, node, VariantSet())
+            formatted_vars = ["$(v[1]):$(v[2])>$(v[3])" for v in vars]
+            vars_str = join(formatted_vars, ",")
             
-            write(file, "$node\t$descendants_str\t$variants_str\n")
+            write(file, "$node\t$descendants_str\t$vars_str\n")
         end
     end
 
     println("Results written to TSV file: $output_file")
+    
     return nothing
 end
 
@@ -25,14 +26,6 @@ function read_variants_tsv(filename::String)
     end
 
     df = CSV.read(filename, DataFrame, delim="\t")
-    
-    if !("Node" in names(df))
-        error("Required column 'Node' not found in $filename")
-    end
-    if !("Defining_Variants" in names(df))
-        error("Required column 'Defining_Variants' not found in $filename")
-    end
-    
     vars_dict = VariantMap()
     for (i, node_name) in enumerate(df[!, "Node"])
         vars_dict[node_name] = VariantSet()
@@ -41,17 +34,16 @@ function read_variants_tsv(filename::String)
             continue
         end
         
-        vars_list = split(vars_str, ',')
-        for v in vars_list
-            m = match(r"^(\d+):([-a-zA-Z])>([-a-zA-Z])$", String(v)) # Match pos:ref>alt
+        vars_vec = split(vars_str, ',') # Split string at commas
+        for var in vars_vec
+            m = match(r"^(\d+):([-a-zA-Z])>([-a-zA-Z])$", String(var)) # Match pos:ref>alt
             if isnothing(m)
-                @warn "Could not parse variant: $v for node: $node_name"
+                @warn "Failed to parse variant: $var for node: $node_name"
                 continue
             end
-            
-            pos = parse(Int64, m[1])
-            ref = LongDNA{4}(m[2])[1] # Extract single character of type DNA
-            alt = LongDNA{4}(m[3])[1]
+            pos = parse(Int64, m.captures[1])
+            ref = LongDNA{4}(m.captures[2])[1] # Extract single character of type DNA
+            alt = LongDNA{4}(m.captures[3])[1]
             push!(vars_dict[node_name], (pos, ref, alt))
         end
     end
@@ -82,4 +74,33 @@ function read_ancestral_sequence_tsv(filename::String)
     end
     
     return ancestral_state
+end
+
+# Write sample -> node assignments to CSV
+function output_assignments_csv(assignments::Dict{String, Vector{Vector{Any}}}, output_file::String)
+    rows = NamedTuple{(:Sample, :Rank, :Node, :Score, :Shared_Count, :SampleSpecific_Count, :NodeSpecific_Count),
+                      Tuple{String, Int, String, Float64, Int, Int, Int}}[]
+    for (sample_id, results) in sort(collect(assignments); by=first)
+        if isempty(results)
+            push!(rows, (Sample=sample_id, Rank=1, Node="No classification", Score=0.0,
+                         Shared_Count=0, SampleSpecific_Count=0, NodeSpecific_Count=0))
+            continue
+        end
+        for (rank, r) in enumerate(results[1:min(end, 5)])
+            node_name, shared_variants, unique_to_sample, unique_to_node, score = r
+            push!(rows, (
+                Sample=sample_id,
+                Rank=rank,
+                Node=String(node_name),
+                Score=Float64(score),
+                Shared_Count=length(shared_variants),
+                SampleSpecific_Count=length(unique_to_sample),
+                NodeSpecific_Count=length(unique_to_node),
+            ))
+        end
+    end
+    df = DataFrame(rows)
+    CSV.write(output_file, df)
+    println("Assignment results written to CSV file: $output_file")
+    return nothing
 end

@@ -1,36 +1,114 @@
-function classify_sample(tree::RecursiveTree, all_node_vars::VariantMap, sample_variants::VariantSet, scoring_metric::String="kulczynski")
-    internal_nodes = reverse(filter(node -> node ∉ Phylo.getleafnames(tree), Phylo.getnodenames(tree)))
-    qualifying_nodes = Tuple{String, VariantSet, Float64, Int}[]
-    for n in internal_nodes
-        n_name = Phylo.getnodename(tree, n)
-        n_vars = if n_name in keys(all_node_vars)
-            all_node_vars[n_name]
+# Helper function to print classification results
+function print_classification_results(assignments::Dict{String, Vector{Vector{Any}}}, scoring_metric::String)
+    println("Using $scoring_metric for sample classification.")
+    println("\nAssignment results:")
+    println("=" ^ 80)
+    
+    for (sample_id, results) in assignments
+        println("Sample: $sample_id")
+        
+        # Show best assignment
+        best_result = results[1]
+        node_name, shared_variants, unique_to_sample, unique_to_node, score = best_result
+        
+        println("  Best assignment:")
+        println("    Node: $node_name")
+        println("    Score: $(round(score, digits=3))")
+        
+        if node_name != "No classification" && node_name != "No classification due to score < 0.1"
+            shared_strs = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in shared_variants]
+            sample_strs = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in unique_to_sample]
+            node_strs = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in unique_to_node]
+            
+            println("    Shared variants ($(length(shared_variants))): $(join(shared_strs, ", "))")
+            println("    Sample-specific variants ($(length(unique_to_sample))): $(join(sample_strs, ", "))")
+            println("    Node-specific variants ($(length(unique_to_node))): $(join(node_strs, ", "))")
+        end
+        
+        # Show second best if available
+        if length(results) > 1
+            second_result = results[2]
+            node_name2, shared_variants2, unique_to_sample2, unique_to_node2, score2 = second_result
+            
+            println("  Second best assignment:")
+            println("    Node: $node_name2")
+            println("    Score: $(round(score2, digits=3))")
+            
+            if node_name2 != "No classification" && node_name2 != "No classification due to score < 0.1"
+                shared_strs2 = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in shared_variants2]
+                sample_strs2 = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in unique_to_sample2]
+                node_strs2 = ["$(pos):$(ref)>$(alt)" for (pos, ref, alt) in unique_to_node2]
+                
+                println("    Shared variants ($(length(shared_variants2))): $(join(shared_strs2, ", "))")
+                println("    Sample-specific variants ($(length(unique_to_sample2))): $(join(sample_strs2, ", "))")
+                println("    Node-specific variants ($(length(unique_to_node2))): $(join(node_strs2, ", "))")
+            end
         else
-            VariantSet() # Default empty set
+            println("  Second best assignment: None")
         end
-
-        isempty(n_vars) && continue # Skip empty nodes
-        score = if scoring_metric == "jaccard"
-            jaccard(sample_variants, n_vars)
-        elseif scoring_metric == "kulczynski"
-            kulczynski(sample_variants, n_vars)
-        end
-        push!(qualifying_nodes, (n_name, n_vars, score, length(n_vars)))
-    end
-
-    sort!(qualifying_nodes, by = x -> x[3], rev=true)
-    highest_score = qualifying_nodes[1][3]
-    best_nodes = filter(x -> x[3] == highest_score, qualifying_nodes)
-    if length(best_nodes) == 1
-        return [[best_nodes[1][1], best_nodes[1][2], best_nodes[1][3]]]
-    else
-        return [[node[1], node[2], node[3]] for node in best_nodes]
+        
+        println("-" ^ 80)
     end
 end
 
-function classify_samples_from_msa(tree::RecursiveTree, all_node_vars::VariantMap, msa_file::String, ref_id::String, ancestral_state::Dict{Int, DNA}, scoring_metric::String="kulczynski")
-    sample_vars = parse_msa_classify(msa_file, ref_id, ancestral_state)
-    assignments = Dict{String, Vector{}}()
+function classify_sample(tree::RecursiveTree, all_node_vars::VariantMap, sample_vars::VariantSet, scoring_metric::String)
+    internal_nodes = reverse(filter(node -> node ∉ Phylo.getleafnames(tree), Phylo.getnodenames(tree)))
+    qualifying_nodes = Vector{Tuple{String, VariantSet, VariantSet, VariantSet, Float64}}()
+    
+    # Iterate through each node and calculate the sample assignment score
+    for n in internal_nodes
+        n_name = Phylo.getnodename(tree, n)
+        n_vars = get(all_node_vars, n_name, VariantSet())
+        isempty(n_vars) && continue
+        
+        shared_variants = intersect(sample_vars, n_vars)
+        unique_to_sample = setdiff(sample_vars, n_vars)
+        unique_to_node = setdiff(n_vars, sample_vars)
+
+        if scoring_metric == "jaccard"
+            score = jaccard(sample_vars, n_vars)
+        elseif scoring_metric == "kulczynski"
+            score = kulczynski(sample_vars, n_vars)
+        else 
+            error("Unknown scoring metric $scoring_metric. Use 'kulczynski' or 'jaccard'")
+        end
+        push!(qualifying_nodes, (n_name, shared_variants, unique_to_sample, unique_to_node, score))
+    end
+
+    # Sort qualifying nodes by score and return the top 2 nodes for each sample
+    sort!(qualifying_nodes, by = x -> x[5], rev=true)
+    results = []
+    for i in 1:min(5, length(qualifying_nodes))
+        node_name, shared, unique_to_sample, unique_to_node, score = qualifying_nodes[i]
+        push!(results, [node_name, shared, unique_to_sample, unique_to_node, score])
+    end
+    
+    return results
+end
+
+# Method 1: Helper function for ancestral-based classification
+function classify_samples_from_msa(
+    tree::RecursiveTree, all_node_vars::VariantMap, msa_file::String, ref_id::String, 
+    ancestral_state::Dict{Int, DNA}, scoring_metric::String="kulczynski"
+    )
+    sample_vars = parse_msa_classify(msa_file, ref_id, ancestral_state) # Use ancestral states
+    assignments = Dict{String, Vector{Vector{Any}}}()
+
+    for (sample_id, variants) in sample_vars
+        nodes = classify_sample(tree, all_node_vars, variants, scoring_metric)
+        assignments[sample_id] = nodes
+    end
+    
+    return assignments
+end
+
+# Method 2: Helper function for outgroup-based classification  
+function classify_samples_from_msa(
+    tree::RecursiveTree, all_node_vars::VariantMap, msa_file::String, 
+    ref_id::String, scoring_metric::String
+    )
+    sample_vars = parse_msa_classify(msa_file, ref_id)
+    assignments = Dict{String, Vector{Vector{Any}}}()
 
     for (sample_id, variants) in sample_vars
         nodes = classify_sample(tree, all_node_vars, variants, scoring_metric)
@@ -41,62 +119,55 @@ function classify_samples_from_msa(tree::RecursiveTree, all_node_vars::VariantMa
 end
 
 """
-    classify(msa_file::String, newick_file::String, scaffold_file::String, ancestral_seq_file::String, ref_id::String, scoring_metric::String = "kulczynski")
+    classify(msa_file::String, newick_file::String, scaffold_file::String, ancestral_seq_file::String, ref_id::String, scoring_metric::String)
 
-Assign new samples to nodes on a previously defined scaffold tree.
+Assign new samples to nodes on a previously annotated phylogenetic tree (using ancestral sequence reconstruction for annotation).
 
 # Arguments
 - `msa_file::String`: Path to multiple sequence alignment file in FASTA format.
 - `newick_file::String`: Path to the tree file in Newick format.
-- `scaffold_file::String`: Path to the scaffold tree in TSV format to be used for sample classification. This file must be generated using Haplogrouper.make_scaffold().
-- `ancestral_seq_file:: String`: Path to the ancestral sequence file in TSV format. This file must be generated using Haplogrouper.make_scaffold()
-- `ref_id::String`: Sequence ID of the reference sample. This must be the same as the reference used when creating the scaffold tree using Haplogrouper.make_scaffold().
-- `scoring_metric::String`: A string denoting the scoring method to be used for sample classification. The options are "kulczynski" and "jaccard". The default is "kulczynski".
+- `scaffold_file::String`: Path to the scaffold tree in TSV format to be used for sample classification. This file must be generated using Haplogrouper.annotate().
+- `ref_id::String`: Sequence ID of the reference sample. This must be the same as the reference used when creating the scaffold tree using Haplogrouper.annotate().
+- `ancestral_seq_file:: String`: Path to the ancestral sequence file in TSV format. This file must be generated using Haplogrouper.annotate()
+- `scoring_metric::String`: A string denoting the scoring method. Options: "kulczynski" and "jaccard".
 
 # Returns
 - `nothing`
-
-# Example 
-```jldoctest
-julia> msa_string = ">ref\\nATCGATCG\\n>s1_new\\nATGGATCT\\n>s2_new\\nATGGATCG\\n>s3_new\\nATCGATCC\\n>s4_new\\nATCGATGC";
-
-julia> tree_string = "((s1,s2),(s3,s4),ref);";
-
-julia> scaffold_string = "Node\\tDescendants\\tDefining_Variants\\nNode 8\\tref,s1,s2,s3,s4\\t\\nNode 3\\ts1,s2\\t3:C>G\\nNode 6\\ts3,s4\\t8:G>C";
-
-julia> ancestral_string = "1\\tA\\n2\\tT\\n3\\tC\\n4\\tG\\n5\\tA\\n6\\tT\\n7\\tC\\n8\\tG\\n";
-
-julia> write("test_sequences.fasta", msa_string);
-
-julia> write("test_tree.nwk", tree_string);
-
-julia> write("test_scaffold.tsv", scaffold_string);
-
-julia> write("test_ancestral.tsv", ancestral_string);
-
-julia> classify("test_sequences.fasta", "test_tree.nwk", "test_scaffold.tsv", "test_ancestral.tsv", "ref", "kulczynski")
-Using kulczynski for sample classification.
-
-Assignment results:
-s3_new -> Vector{Any}[["Node 6", Set(Tuple{Int64, BioSymbols.DNA, BioSymbols.DNA}[(8, DNA_G, DNA_C)]), 1.0]]
-s4_new -> Vector{Any}[["Node 6", Set(Tuple{Int64, BioSymbols.DNA, BioSymbols.DNA}[(8, DNA_G, DNA_C)]), 0.75]]
-s1_new -> Vector{Any}[["Node 3", Set(Tuple{Int64, BioSymbols.DNA, BioSymbols.DNA}[(3, DNA_C, DNA_G)]), 0.75]]
-s2_new -> Vector{Any}[["Node 3", Set(Tuple{Int64, BioSymbols.DNA, BioSymbols.DNA}[(3, DNA_C, DNA_G)]), 1.0]]
-```
-See also [`Haplogrouper.make_scaffold`](@ref)
 """
-function classify(msa_file::String, newick_file::String, scaffold_file::String, ancestral_seq_file::String, ref_id::String, scoring_metric::String = "kulczynski")
+function classify(msa_file::String, newick_file::String, scaffold_file::String, ref_id::String, ancestral_seq_file::String, scoring_metric::String)
     all_node_vars = read_variants_tsv(scaffold_file)
     tree = parse_newick(newick_file)
     ancestral_seq = read_ancestral_sequence_tsv(ancestral_seq_file)
 
-    println("Using $scoring_metric for sample classification.")
     assignments = classify_samples_from_msa(tree, all_node_vars, msa_file, ref_id, ancestral_seq, scoring_metric)
+    print_classification_results(assignments, scoring_metric)
+    output_assignments_csv(assignments, "haplogrouper_assignments.csv")
+    
+    return nothing
+end
 
-    println("\nAssignment results:")
-    for (sample, node) in assignments
-        println("$sample -> $node")
-    end
+"""
+    classify(msa_file::String, newick_file::String, scaffold_file::String, ref_id::String, scoring_metric::String)
 
+Assign new samples to nodes on a previously annotated phylogenetic tree (using outgroup mode for annotation).
+
+# Arguments
+- `msa_file::String`: Path to multiple sequence alignment file in FASTA format.
+- `newick_file::String`: Path to the tree file in Newick format.
+- `scaffold_file::String`: Path to the scaffold tree in TSV format to be used for sample classification. This file must be generated using Haplogrouper.annotate().
+- `ref_id::String`: Sequence ID of the reference sample. This must be the same as the reference used when creating the scaffold tree using Haplogrouper.annotate().
+- `scoring_metric::String`: A string denoting the scoring method. Options: "kulczynski" and "jaccard".
+
+# Returns
+- `nothing`
+"""
+function classify(msa_file::String, newick_file::String, scaffold_file::String, ref_id::String, scoring_metric::String)
+    all_node_vars = read_variants_tsv(scaffold_file)
+    tree = parse_newick(newick_file)
+    
+    assignments = classify_samples_from_msa(tree, all_node_vars, msa_file, ref_id, scoring_metric)
+    print_classification_results(assignments, scoring_metric)
+    output_assignments_csv(assignments, "haplogrouper_assignments.csv")
+    
     return nothing
 end
